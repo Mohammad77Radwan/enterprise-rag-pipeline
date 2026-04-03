@@ -1,0 +1,22 @@
+{
+  "name": "enterprise-rag-pipeline",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.black-formatter",
+        "charliermarsh.ruff",
+        "mtxr.sqltools",
+        "esbenp.prettier-vscode"
+      ]
+    }
+  },
+  "postCreateCommand": "python -m pip install -r backend/requirements.txt"
+}

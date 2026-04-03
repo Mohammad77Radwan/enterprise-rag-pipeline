@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+celery
+redis
+qdrant-client
+langchain
+openai
+pydantic
+python-multipart
