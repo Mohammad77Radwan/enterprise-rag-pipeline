@@ -1,0 +1,9 @@
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.db
+
+# Frontend artifacts
+frontend/node_modules/
+frontend/.next/
