@@ -1,52 +1,85 @@
-# enterprise-rag-pipeline
+# Enterprise RAG Pipeline
 
-An asynchronous, enterprise-grade Retrieval-Augmented Generation (RAG) pipeline with vector search and background task processing.
+Production-minded document ingestion pipeline for Retrieval-Augmented Generation (RAG) systems.
 
-## Stack
+This project demonstrates how to move from simple file uploads to a reliable ingestion control plane with async processing, status observability, and environment-aware deployment paths.
 
-- FastAPI API server for uploads and document status APIs
-- Celery worker for asynchronous PDF processing
-- PostgreSQL for metadata persistence
-- Redis as Celery broker/backend
-- Qdrant as vector database
-- Next.js frontend for upload and status dashboard
+## Why This Exists
 
-## Services
+Most RAG prototypes break down at ingestion time: uploads are opaque, processing is brittle, and operators have no visibility into queue state or failures.
 
-The root `docker-compose.yml` includes:
+This repository focuses on that operational gap:
 
-- `db` (PostgreSQL 15) on `5432`
-- `redis` on `6379`
-- `vector_db` (Qdrant) on `6333`
-- `api` (FastAPI) on `8000`
+- Controlled ingestion entry point (FastAPI)
+- Async processing workflow (Celery)
+- Persistent metadata tracking (PostgreSQL/SQLite for local)
+- Vector-store integration boundary (Qdrant)
+- Operator dashboard with live status and summaries (Next.js)
+
+## Architecture
+
+```text
+[Next.js UI]
+	|
+	| HTTP multipart upload
+	v
+[FastAPI API] -----> [PostgreSQL metadata]
+	|
+	| enqueue
+	v
+[Celery Worker] -----> [Qdrant vector DB]
+```
+
+Core implementation goals:
+
+- Separate request handling from heavy processing
+- Keep data flow explicit and testable
+- Preserve observability through first-class status endpoints
+- Support both containerized and constrained local environments
+
+## Tech Stack
+
+- Backend: FastAPI, SQLAlchemy, Celery
+- Data: PostgreSQL (container mode), SQLite (local fallback runtime)
+- Queue: Redis (container mode), memory broker option for constrained local runtime
+- Vector Layer: Qdrant
+- Frontend: Next.js (App Router, TypeScript, Tailwind)
+- Dev Environment: Dev Container (Python 3.11 + Node 20)
+
+## Runtime Modes
+
+### 1) Containerized Mode (Primary)
+
+Uses root `docker-compose.yml` with:
+
+- `db` (PostgreSQL 15)
+- `redis`
+- `vector_db` (Qdrant)
+- `api` (FastAPI)
 - `worker` (Celery)
-- `frontend` (Next.js) on `3000`
+- `frontend` (Next.js)
 
-## Run
-
-From the repository root:
+Start:
 
 ```bash
 docker compose up --build
 ```
 
-Open:
+### 2) Local Scripted Mode (Constrained Environments)
 
-- Frontend: `http://localhost:3000`
-- API docs: `http://localhost:8000/docs`
+When Docker is unavailable, use a single env file and script-driven startup.
 
-## Local Runtime (Single Env File)
+1. Create runtime config:
 
-When Docker is unavailable in the current environment:
+```bash
+cp .env.example .env
+```
 
-1. Copy `.env.example` to `.env` and adjust ports/values if needed.
-2. Start both backend and frontend from one command:
+2. Start both services:
 
 ```bash
 ./scripts/dev-up.sh
 ```
-
-`frontend/next.config.ts` proxies `/api/v1/*` to `API_SERVER_URL`, so browser requests stay same-origin and work in forwarded web environments.
 
 3. Stop both services:
 
@@ -54,24 +87,60 @@ When Docker is unavailable in the current environment:
 ./scripts/dev-down.sh
 ```
 
-## API
+Notes:
 
-- `POST /api/v1/upload` accepts multipart form-data with field name `file`
-- `GET /api/v1/documents` returns uploaded documents and current processing status
-- `GET /api/v1/documents/{id}` returns details for a single document
-- `GET /api/v1/summary` returns aggregate totals by status
-- `GET /health` returns API health status
+- `frontend/next.config.ts` rewrites `/api/v1/*` to `API_SERVER_URL`.
+- This keeps browser calls same-origin and avoids forwarded-port CORS issues in web IDEs.
 
-## Health Checks
+## API Surface
 
-- Compose includes healthchecks for PostgreSQL, Redis, and Backend.
-- Frontend waits for Backend health before start.
-- Worker waits for PostgreSQL and Redis health before start.
+- `POST /api/v1/upload`: Upload a document and dispatch processing
+- `GET /api/v1/documents`: List documents with status metadata
+- `GET /api/v1/documents/{id}`: Get a single document record
+- `GET /api/v1/summary`: Aggregate status counters
+- `GET /health`: Service health probe
 
-## Devcontainer
+## Operational Characteristics
 
-`.devcontainer/devcontainer.json` uses:
+- Async-first ingestion with queue-backed processing path
+- Health endpoints and compose healthchecks for service readiness
+- Status-driven UI for operator visibility
+- Graceful degraded behavior in local mode when infra services are absent
+- Scripted startup with PID/log files for quick local control
 
-- Base image: `mcr.microsoft.com/devcontainers/python:3.11`
-- Node.js 20 feature
-- VS Code extensions for Python, formatting, linting, SQL tools, and Prettier
+## Repository Highlights
+
+- `backend/main.py`: API entrypoint, upload flow, status endpoints
+- `backend/worker.py`: Processing task, status transitions, vector step
+- `frontend/src/components/Uploader.tsx`: Upload interaction and dispatch
+- `frontend/src/components/StatusList.tsx`: Live status board and detail panel
+- `frontend/src/lib/apiClient.ts`: Environment-aware API resolution strategy
+- `scripts/dev-up.sh`: One-command local orchestration
+
+## Developer Experience
+
+`.devcontainer/devcontainer.json` includes:
+
+- Python 3.11 base image
+- Node 20 feature
+- Docker-in-Docker feature for container workflows
+- VS Code extensions for linting, formatting, and SQL tooling
+
+## Roadmap Candidates
+
+- Retry policies and dead-letter handling for failed jobs
+- Structured logging and trace correlation IDs
+- AuthN/AuthZ for ingestion endpoints
+- Chunk embedding pipeline with collection versioning
+- Integration and contract test suite across API and worker boundaries
+
+## Summary
+
+This project is intentionally structured like an engineering deliverable, not a demo page:
+
+- observable
+- asynchronous
+- environment-aware
+- deployment-ready
+
+It provides a strong foundation for enterprise-grade document ingestion in RAG platforms.
