@@ -2,6 +2,8 @@
 
 import { useCallback, useMemo, useState } from "react";
 
+import { apiRequest } from "@/src/lib/apiClient";
+
 type UploadState = "idle" | "uploading" | "success" | "error";
 
 type UploaderProps = {
@@ -49,7 +51,7 @@ export default function Uploader({ onUploaded }: UploaderProps) {
       setUploadState("uploading");
       setMessage("Uploading and queueing document...");
 
-      const response = await fetch("http://localhost:8000/api/v1/upload", {
+      const response = await apiRequest("/api/v1/upload", {
         method: "POST",
         body: formData,
       });

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { apiRequest } from "@/src/lib/apiClient";
+
 type DocumentItem = {
   id: number;
   filename: string;
@@ -38,11 +40,11 @@ export default function StatusList({ refreshKey = 0 }: StatusListProps) {
     try {
       setError("");
       const [documentsResponse, summaryResponse] = await Promise.all([
-        fetch("http://localhost:8000/api/v1/documents", {
+        apiRequest("/api/v1/documents", {
           method: "GET",
           cache: "no-store",
         }),
-        fetch("http://localhost:8000/api/v1/summary", {
+        apiRequest("/api/v1/summary", {
           method: "GET",
           cache: "no-store",
         }),
@@ -71,7 +73,7 @@ export default function StatusList({ refreshKey = 0 }: StatusListProps) {
   const fetchDocumentById = useCallback(async (docId: number) => {
     try {
       setSelectedDocError("");
-      const response = await fetch(`http://localhost:8000/api/v1/documents/${docId}`, {
+      const response = await apiRequest(`/api/v1/documents/${docId}`, {
         method: "GET",
         cache: "no-store",
       });

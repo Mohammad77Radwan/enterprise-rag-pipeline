@@ -4,6 +4,14 @@ __pycache__/
 *.py[cod]
 *.db
 
+# Local runtime files
+.env
+.backend.pid
+.frontend.pid
+.backend.log
+.frontend.log
+uploads/
+
 # Frontend artifacts
 frontend/node_modules/
 frontend/.next/

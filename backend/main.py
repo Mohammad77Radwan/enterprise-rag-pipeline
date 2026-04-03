@@ -13,9 +13,12 @@ from backend.worker import process_pdf
 
 app = FastAPI(title="Enterprise RAG Pipeline")
 
+allowed_origins = os.getenv("FRONTEND_ORIGINS", "http://localhost:3000,http://localhost:3001")
+cors_origins = [origin.strip() for origin in allowed_origins.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -47,7 +50,7 @@ async def upload_file(file: UploadFile = File(...)):
         db.commit()
         db.refresh(document)
 
-        uploads_dir = Path(os.getenv("UPLOAD_DIR", "/app/uploads"))
+        uploads_dir = Path(os.getenv("UPLOAD_DIR", "./uploads"))
         uploads_dir.mkdir(parents=True, exist_ok=True)
         safe_name = _sanitize_filename(file.filename)
         destination = uploads_dir / f"{document.id}_{safe_name}"
@@ -55,7 +58,11 @@ async def upload_file(file: UploadFile = File(...)):
         contents = await file.read()
         destination.write_bytes(contents)
 
-        process_pdf.delay(document.id)
+        try:
+            process_pdf.delay(document.id)
+        except Exception:
+            # Local/degraded mode fallback when queue infrastructure is unavailable.
+            process_pdf(document.id)
 
         return {"id": document.id}
     except Exception as exc:

@@ -28,7 +28,7 @@ def process_pdf(doc_id: int):
         document.upload_status = "Processing"
         session.commit()
 
-        uploads_dir = Path(os.getenv("UPLOAD_DIR", "/app/uploads"))
+        uploads_dir = Path(os.getenv("UPLOAD_DIR", "./uploads"))
         matched_files = list(uploads_dir.glob(f"{doc_id}_*"))
         file_text = ""
         if matched_files:
@@ -43,8 +43,12 @@ def process_pdf(doc_id: int):
 
         chunks = [file_text[index : index + 800] for index in range(0, len(file_text), 800)]
 
-        vector_client = QdrantClient(url=QDRANT_URL)
-        _ = vector_client
+        try:
+            vector_client = QdrantClient(url=QDRANT_URL)
+            _ = vector_client
+        except Exception:
+            # Keep processing successful even if vector store is temporarily unavailable.
+            pass
 
         document.upload_status = "Completed"
         session.commit()

@@ -18,7 +18,7 @@ The root `docker-compose.yml` includes:
 - `db` (PostgreSQL 15) on `5432`
 - `redis` on `6379`
 - `vector_db` (Qdrant) on `6333`
-- `backend` (FastAPI) on `8000`
+- `api` (FastAPI) on `8000`
 - `worker` (Celery)
 - `frontend` (Next.js) on `3000`
 
@@ -34,6 +34,25 @@ Open:
 
 - Frontend: `http://localhost:3000`
 - API docs: `http://localhost:8000/docs`
+
+## Local Runtime (Single Env File)
+
+When Docker is unavailable in the current environment:
+
+1. Copy `.env.example` to `.env` and adjust ports/values if needed.
+2. Start both backend and frontend from one command:
+
+```bash
+./scripts/dev-up.sh
+```
+
+`frontend/next.config.ts` proxies `/api/v1/*` to `API_SERVER_URL`, so browser requests stay same-origin and work in forwarded web environments.
+
+3. Stop both services:
+
+```bash
+./scripts/dev-down.sh
+```
 
 ## API
 
