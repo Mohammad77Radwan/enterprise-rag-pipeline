@@ -1,5 +1,7 @@
 # Enterprise RAG Pipeline
 
+Language: English | [Francais](README.fr.md)
+
 A production-oriented ingestion control plane for Retrieval-Augmented Generation (RAG), focused on reliability, observability, and clean service boundaries.
 
 This repository is intentionally designed to model a real ingestion backbone rather than a demo upload screen.
@@ -19,6 +21,7 @@ This repository is intentionally designed to model a real ingestion backbone rat
 - [Operational Runbook](#operational-runbook)
 - [Troubleshooting](#troubleshooting)
 - [Engineering Roadmap](#engineering-roadmap)
+- [Summary](#summary)
 
 ## What This System Solves
 
@@ -41,26 +44,26 @@ This project addresses that with a status-first ingestion design:
 
 ```mermaid
 flowchart LR
-	UI[Next.js Operator UI]
-	API[FastAPI API]
-	DB[(PostgreSQL Metadata)]
-	REDIS[(Redis Broker)]
-	WORKER[Celery Worker]
-	QDRANT[(Qdrant Vector DB)]
-	FS[(Uploads Directory)]
+    UI[Next.js Operator UI]
+    API[FastAPI API]
+    DB[(PostgreSQL Metadata)]
+    REDIS[(Redis Broker)]
+    WORKER[Celery Worker]
+    QDRANT[(Qdrant Vector DB)]
+    FS[(Uploads Directory)]
 
-	UI -->|POST /api/v1/upload| API
-	UI -->|GET /api/v1/documents| API
-	UI -->|GET /api/v1/summary| API
+    UI -->|POST /api/v1/upload| API
+    UI -->|GET /api/v1/documents| API
+    UI -->|GET /api/v1/summary| API
 
-	API -->|insert/update document rows| DB
-	API -->|persist file bytes| FS
-	API -->|enqueue task process_pdf| REDIS
+    API -->|insert/update document rows| DB
+    API -->|persist file bytes| FS
+    API -->|enqueue task process_pdf| REDIS
 
-	REDIS --> WORKER
-	WORKER -->|status transitions| DB
-	WORKER -->|read raw upload| FS
-	WORKER -->|vector boundary call| QDRANT
+    REDIS --> WORKER
+    WORKER -->|status transitions| DB
+    WORKER -->|read raw upload| FS
+    WORKER -->|vector boundary call| QDRANT
 ```
 
 ### Design Intent
@@ -74,32 +77,32 @@ flowchart LR
 
 ```mermaid
 sequenceDiagram
-	participant Browser as Next.js UI
-	participant Api as FastAPI
-	participant Sql as PostgreSQL
-	participant Fs as Uploads Dir
-	participant Queue as Celery Broker
-	participant Worker as Celery Worker
-	participant Vec as Qdrant
+    participant Browser as Next.js UI
+    participant Api as FastAPI
+    participant Sql as PostgreSQL
+    participant Fs as Uploads Dir
+    participant Queue as Celery Broker
+    participant Worker as Celery Worker
+    participant Vec as Qdrant
 
-	Browser->>Api: POST /api/v1/upload (multipart file)
-	Api->>Sql: INSERT document(status=Pending)
-	Api->>Fs: Write upload as <doc_id>_<sanitized_name>
-	Api->>Queue: process_pdf.delay(doc_id)
-	Queue-->>Worker: Dispatch task
-	Worker->>Sql: UPDATE status=Processing
-	Worker->>Fs: Read stored file
-	Worker->>Worker: Build 800-char chunks
-	Worker->>Vec: Connect/emit vector step (best-effort)
-	Worker->>Sql: UPDATE status=Completed
-	Browser->>Api: GET /api/v1/documents + /summary (polling)
-	Api-->>Browser: Current states and counters
+    Browser->>Api: POST /api/v1/upload (multipart file)
+    Api->>Sql: INSERT document(status=Pending)
+    Api->>Fs: Write upload as <doc_id>_<sanitized_name>
+    Api->>Queue: process_pdf.delay(doc_id)
+    Queue-->>Worker: Dispatch task
+    Worker->>Sql: UPDATE status=Processing
+    Worker->>Fs: Read stored file
+    Worker->>Worker: Build 800-char chunks
+    Worker->>Vec: Connect/emit vector step (best-effort)
+    Worker->>Sql: UPDATE status=Completed
+    Browser->>Api: GET /api/v1/documents + /summary (polling)
+    Api-->>Browser: Current states and counters
 ```
 
 ## Service Inventory
 
 | Service | Technology | Responsibility | Default Port |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `frontend` | Next.js 15 + TypeScript | Operator UI for upload, list, summary, drill-down | `3000` (compose), `3001` (local script) |
 | `api` | FastAPI + SQLAlchemy | Upload ingestion, status APIs, summary aggregation | `8000` (compose), `8001` (local script) |
 | `worker` | Celery | Async processing lifecycle and vector boundary | N/A |
@@ -110,7 +113,7 @@ sequenceDiagram
 ## Repository Map
 
 | Path | Purpose |
-|---|---|
+| --- | --- |
 | `backend/main.py` | FastAPI app, upload endpoint, document/summary endpoints, CORS config |
 | `backend/worker.py` | Celery app, processing task, status transitions, chunk generation |
 | `backend/database.py` | DB engine/session setup and boot-time connection wait loop |
@@ -127,7 +130,7 @@ sequenceDiagram
 ### `documents`
 
 | Column | Type | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `id` | `Integer` | Primary key |
 | `filename` | `String(255)` | Original client filename |
 | `upload_status` | `String(50)` | Lifecycle state (`Pending`, `Processing`, `Completed`) |
@@ -136,7 +139,7 @@ sequenceDiagram
 ### State Lifecycle
 
 | Transition | Trigger |
-|---|---|
+| --- | --- |
 | `Pending -> Processing` | Worker task starts for a document |
 | `Processing -> Completed` | Worker finishes chunking/vector step |
 | `* -> Pending` | Worker exception rollback path |
@@ -144,7 +147,7 @@ sequenceDiagram
 ## API Contract
 
 | Method | Endpoint | Description | Response |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `GET` | `/health` | Liveness probe for API service | `{"status":"ok"}` |
 | `POST` | `/api/v1/upload` | Persist metadata + file and dispatch worker | `{"id": <int>}` |
 | `GET` | `/api/v1/documents` | List all documents (desc by creation time) | `[{id, filename, upload_status, created_at}]` |
@@ -174,7 +177,7 @@ curl -s http://localhost:8001/api/v1/summary
 ### Backend Runtime
 
 | Variable | Required | Description | Example |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `DATABASE_URL` | Yes | SQLAlchemy connection string | `postgresql://postgres:root@db:5432/postgres` |
 | `CELERY_BROKER_URL` | Yes | Celery broker/backend URL | `redis://redis:6379/0` |
 | `QDRANT_URL` | Yes | Qdrant endpoint | `http://vector_db:6333` |
@@ -186,7 +189,7 @@ curl -s http://localhost:8001/api/v1/summary
 ### Frontend Runtime
 
 | Variable | Required | Description |
-|---|---|---|
+| --- | --- | --- |
 | `NEXT_PUBLIC_API_BASE_URL` | No | Preferred API base URL |
 | `NEXT_PUBLIC_API_BASE_URLS` | No | Comma-separated fallback API bases |
 
@@ -232,15 +235,15 @@ The upload endpoint creates a `Document` row first, then writes bytes to disk us
 ```python
 @app.post("/api/v1/upload")
 async def upload_file(file: UploadFile = File(...)):
-	document = Document(filename=file.filename, upload_status="Pending")
-	db.add(document)
-	db.commit()
-	db.refresh(document)
+    document = Document(filename=file.filename, upload_status="Pending")
+    db.add(document)
+    db.commit()
+    db.refresh(document)
 
-	uploads_dir = Path(os.getenv("UPLOAD_DIR", "./uploads"))
-	safe_name = _sanitize_filename(file.filename)
-	destination = uploads_dir / f"{document.id}_{safe_name}"
-	destination.write_bytes(await file.read())
+    uploads_dir = Path(os.getenv("UPLOAD_DIR", "./uploads"))
+    safe_name = _sanitize_filename(file.filename)
+    destination = uploads_dir / f"{document.id}_{safe_name}"
+    destination.write_bytes(await file.read())
 ```
 
 ### 2) Async Dispatch With Degraded Fallback
@@ -249,9 +252,9 @@ If queue infrastructure is unavailable, the system still executes processing syn
 
 ```python
 try:
-	process_pdf.delay(document.id)
+    process_pdf.delay(document.id)
 except Exception:
-	process_pdf(document.id)
+    process_pdf(document.id)
 ```
 
 ### 3) Worker Status Discipline
@@ -306,7 +309,7 @@ tail -f .frontend.log
 ## Troubleshooting
 
 | Symptom | Likely Cause | Action |
-|---|---|---|
+| --- | --- | --- |
 | `Missing .env` | Runtime config not initialized | `cp .env.example .env` |
 | `No module named uvicorn` | Backend dependencies missing | install `backend/requirements.txt` in active Python env |
 | `npm: not found` | Node runtime not installed in host/local mode | install Node 20+ or use container mode |
