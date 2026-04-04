@@ -1,146 +1,334 @@
 # Enterprise RAG Pipeline
 
-Production-minded document ingestion pipeline for Retrieval-Augmented Generation (RAG) systems.
+A production-oriented ingestion control plane for Retrieval-Augmented Generation (RAG), focused on reliability, observability, and clean service boundaries.
 
-This project demonstrates how to move from simple file uploads to a reliable ingestion control plane with async processing, status observability, and environment-aware deployment paths.
+This repository is intentionally designed to model a real ingestion backbone rather than a demo upload screen.
 
-## Why This Exists
+## Table of Contents
 
-Most RAG prototypes break down at ingestion time: uploads are opaque, processing is brittle, and operators have no visibility into queue state or failures.
+- [What This System Solves](#what-this-system-solves)
+- [Architecture](#architecture)
+- [End-to-End Ingestion Flow](#end-to-end-ingestion-flow)
+- [Service Inventory](#service-inventory)
+- [Repository Map](#repository-map)
+- [Data Model](#data-model)
+- [API Contract](#api-contract)
+- [Configuration Reference](#configuration-reference)
+- [Run Modes](#run-modes)
+- [Core Implementation Walkthrough](#core-implementation-walkthrough)
+- [Operational Runbook](#operational-runbook)
+- [Troubleshooting](#troubleshooting)
+- [Engineering Roadmap](#engineering-roadmap)
 
-This repository focuses on that operational gap:
+## What This System Solves
 
-- Controlled ingestion entry point (FastAPI)
-- Async processing workflow (Celery)
-- Persistent metadata tracking (PostgreSQL/SQLite for local)
-- Vector-store integration boundary (Qdrant)
-- Operator dashboard with live status and summaries (Next.js)
+RAG projects often fail at ingestion before retrieval quality becomes the bottleneck:
+
+- uploads are accepted but not traceable
+- processing ownership is unclear
+- queue and storage failures have no operator signal
+- local and container workflows diverge
+
+This project addresses that with a status-first ingestion design:
+
+- FastAPI API for document intake and status queries
+- Celery worker for asynchronous processing
+- SQL metadata for durable state transitions
+- Qdrant boundary for vector integration
+- Next.js operations dashboard for live visibility
 
 ## Architecture
 
-```text
-[Next.js UI]
-	|
-	| HTTP multipart upload
-	v
-[FastAPI API] -----> [PostgreSQL metadata]
-	|
-	| enqueue
-	v
-[Celery Worker] -----> [Qdrant vector DB]
+```mermaid
+flowchart LR
+	UI[Next.js Operator UI]
+	API[FastAPI API]
+	DB[(PostgreSQL Metadata)]
+	REDIS[(Redis Broker)]
+	WORKER[Celery Worker]
+	QDRANT[(Qdrant Vector DB)]
+	FS[(Uploads Directory)]
+
+	UI -->|POST /api/v1/upload| API
+	UI -->|GET /api/v1/documents| API
+	UI -->|GET /api/v1/summary| API
+
+	API -->|insert/update document rows| DB
+	API -->|persist file bytes| FS
+	API -->|enqueue task process_pdf| REDIS
+
+	REDIS --> WORKER
+	WORKER -->|status transitions| DB
+	WORKER -->|read raw upload| FS
+	WORKER -->|vector boundary call| QDRANT
 ```
 
-Core implementation goals:
+### Design Intent
 
-- Separate request handling from heavy processing
-- Keep data flow explicit and testable
-- Preserve observability through first-class status endpoints
-- Support both containerized and constrained local environments
+- Request/response path is kept lean and deterministic.
+- Heavy work is delegated to worker execution.
+- Status is a first-class domain primitive (`Pending`, `Processing`, `Completed`).
+- Local degraded mode remains usable if queue/vector infrastructure is unavailable.
 
-## Tech Stack
+## End-to-End Ingestion Flow
 
-- Backend: FastAPI, SQLAlchemy, Celery
-- Data: PostgreSQL (container mode), SQLite (local fallback runtime)
-- Queue: Redis (container mode), memory broker option for constrained local runtime
-- Vector Layer: Qdrant
-- Frontend: Next.js (App Router, TypeScript, Tailwind)
-- Dev Environment: Dev Container (Python 3.11 + Node 20)
+```mermaid
+sequenceDiagram
+	participant Browser as Next.js UI
+	participant Api as FastAPI
+	participant Sql as PostgreSQL
+	participant Fs as Uploads Dir
+	participant Queue as Celery Broker
+	participant Worker as Celery Worker
+	participant Vec as Qdrant
 
-## Runtime Modes
+	Browser->>Api: POST /api/v1/upload (multipart file)
+	Api->>Sql: INSERT document(status=Pending)
+	Api->>Fs: Write upload as <doc_id>_<sanitized_name>
+	Api->>Queue: process_pdf.delay(doc_id)
+	Queue-->>Worker: Dispatch task
+	Worker->>Sql: UPDATE status=Processing
+	Worker->>Fs: Read stored file
+	Worker->>Worker: Build 800-char chunks
+	Worker->>Vec: Connect/emit vector step (best-effort)
+	Worker->>Sql: UPDATE status=Completed
+	Browser->>Api: GET /api/v1/documents + /summary (polling)
+	Api-->>Browser: Current states and counters
+```
+
+## Service Inventory
+
+| Service | Technology | Responsibility | Default Port |
+|---|---|---|---|
+| `frontend` | Next.js 15 + TypeScript | Operator UI for upload, list, summary, drill-down | `3000` (compose), `3001` (local script) |
+| `api` | FastAPI + SQLAlchemy | Upload ingestion, status APIs, summary aggregation | `8000` (compose), `8001` (local script) |
+| `worker` | Celery | Async processing lifecycle and vector boundary | N/A |
+| `db` | PostgreSQL 15 | Document metadata persistence | `5432` |
+| `redis` | Redis | Celery broker/backend in container mode | `6379` |
+| `vector_db` | Qdrant | Vector store integration point | `6333` |
+
+## Repository Map
+
+| Path | Purpose |
+|---|---|
+| `backend/main.py` | FastAPI app, upload endpoint, document/summary endpoints, CORS config |
+| `backend/worker.py` | Celery app, processing task, status transitions, chunk generation |
+| `backend/database.py` | DB engine/session setup and boot-time connection wait loop |
+| `backend/models.py` | SQLAlchemy `Document` model |
+| `frontend/src/components/Uploader.tsx` | Upload UX, drag-drop, POST dispatch |
+| `frontend/src/components/StatusList.tsx` | Polling dashboard, summary cards, per-document details |
+| `frontend/src/lib/apiClient.ts` | API base fallback strategy for varied runtime environments |
+| `scripts/dev-up.sh` | Local process orchestration with PID/log files |
+| `scripts/dev-down.sh` | Local process shutdown and PID cleanup |
+| `docker-compose.yml` | Full multi-service runtime topology |
+
+## Data Model
+
+### `documents`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `Integer` | Primary key |
+| `filename` | `String(255)` | Original client filename |
+| `upload_status` | `String(50)` | Lifecycle state (`Pending`, `Processing`, `Completed`) |
+| `created_at` | `DateTime` | UTC timestamp at insert |
+
+### State Lifecycle
+
+| Transition | Trigger |
+|---|---|
+| `Pending -> Processing` | Worker task starts for a document |
+| `Processing -> Completed` | Worker finishes chunking/vector step |
+| `* -> Pending` | Worker exception rollback path |
+
+## API Contract
+
+| Method | Endpoint | Description | Response |
+|---|---|---|---|
+| `GET` | `/health` | Liveness probe for API service | `{"status":"ok"}` |
+| `POST` | `/api/v1/upload` | Persist metadata + file and dispatch worker | `{"id": <int>}` |
+| `GET` | `/api/v1/documents` | List all documents (desc by creation time) | `[{id, filename, upload_status, created_at}]` |
+| `GET` | `/api/v1/documents/{id}` | Fetch single document | `{id, filename, upload_status, created_at}` |
+| `GET` | `/api/v1/summary` | Aggregate status counters | `{Pending, Processing, Completed, Total}` |
+
+### Example Calls
+
+```bash
+# Health
+curl -s http://localhost:8001/health
+
+# Upload
+curl -s -X POST \
+  -F "file=@./sample.pdf" \
+  http://localhost:8001/api/v1/upload
+
+# List statuses
+curl -s http://localhost:8001/api/v1/documents
+
+# Summary
+curl -s http://localhost:8001/api/v1/summary
+```
+
+## Configuration Reference
+
+### Backend Runtime
+
+| Variable | Required | Description | Example |
+|---|---|---|---|
+| `DATABASE_URL` | Yes | SQLAlchemy connection string | `postgresql://postgres:root@db:5432/postgres` |
+| `CELERY_BROKER_URL` | Yes | Celery broker/backend URL | `redis://redis:6379/0` |
+| `QDRANT_URL` | Yes | Qdrant endpoint | `http://vector_db:6333` |
+| `UPLOAD_DIR` | No | Uploaded file storage directory | `./uploads` |
+| `DB_CONNECT_MAX_ATTEMPTS` | No | DB readiness retry count | `30` |
+| `DB_CONNECT_DELAY_SECONDS` | No | Delay between DB retries | `2` |
+| `FRONTEND_ORIGINS` | No | Comma-separated CORS origins | `http://localhost:3000,http://localhost:3001` |
+
+### Frontend Runtime
+
+| Variable | Required | Description |
+|---|---|---|
+| `NEXT_PUBLIC_API_BASE_URL` | No | Preferred API base URL |
+| `NEXT_PUBLIC_API_BASE_URLS` | No | Comma-separated fallback API bases |
+
+`apiClient.ts` automatically falls back through candidate bases, ending with `http://localhost:8000` and `http://localhost:8001`.
+
+## Run Modes
 
 ### 1) Containerized Mode (Primary)
-
-Uses root `docker-compose.yml` with:
-
-- `db` (PostgreSQL 15)
-- `redis`
-- `vector_db` (Qdrant)
-- `api` (FastAPI)
-- `worker` (Celery)
-- `frontend` (Next.js)
-
-Start:
 
 ```bash
 docker compose up --build
 ```
 
-### 2) Local Scripted Mode (Constrained Environments)
+Default URLs:
 
-When Docker is unavailable, use a single env file and script-driven startup.
+- Frontend: `http://localhost:3000`
+- API: `http://localhost:8000`
 
-1. Create runtime config:
+### 2) Local Script Mode
 
 ```bash
 cp .env.example .env
-```
-
-2. Start both services:
-
-```bash
 ./scripts/dev-up.sh
 ```
 
-3. Stop both services:
+Stop services:
 
 ```bash
 ./scripts/dev-down.sh
 ```
 
-Notes:
+Default local URLs:
 
-- `frontend/next.config.ts` rewrites `/api/v1/*` to `API_SERVER_URL`.
-- This keeps browser calls same-origin and avoids forwarded-port CORS issues in web IDEs.
+- Frontend: `http://localhost:3001`
+- API: `http://localhost:8001`
 
-## API Surface
+## Core Implementation Walkthrough
 
-- `POST /api/v1/upload`: Upload a document and dispatch processing
-- `GET /api/v1/documents`: List documents with status metadata
-- `GET /api/v1/documents/{id}`: Get a single document record
-- `GET /api/v1/summary`: Aggregate status counters
-- `GET /health`: Service health probe
+### 1) Intake and Safe File Persistence
 
-## Operational Characteristics
+The upload endpoint creates a `Document` row first, then writes bytes to disk using a sanitized filename prefixed with document id for uniqueness and traceability.
 
-- Async-first ingestion with queue-backed processing path
-- Health endpoints and compose healthchecks for service readiness
-- Status-driven UI for operator visibility
-- Graceful degraded behavior in local mode when infra services are absent
-- Scripted startup with PID/log files for quick local control
+```python
+@app.post("/api/v1/upload")
+async def upload_file(file: UploadFile = File(...)):
+	document = Document(filename=file.filename, upload_status="Pending")
+	db.add(document)
+	db.commit()
+	db.refresh(document)
 
-## Repository Highlights
+	uploads_dir = Path(os.getenv("UPLOAD_DIR", "./uploads"))
+	safe_name = _sanitize_filename(file.filename)
+	destination = uploads_dir / f"{document.id}_{safe_name}"
+	destination.write_bytes(await file.read())
+```
 
-- `backend/main.py`: API entrypoint, upload flow, status endpoints
-- `backend/worker.py`: Processing task, status transitions, vector step
-- `frontend/src/components/Uploader.tsx`: Upload interaction and dispatch
-- `frontend/src/components/StatusList.tsx`: Live status board and detail panel
-- `frontend/src/lib/apiClient.ts`: Environment-aware API resolution strategy
-- `scripts/dev-up.sh`: One-command local orchestration
+### 2) Async Dispatch With Degraded Fallback
 
-## Developer Experience
+If queue infrastructure is unavailable, the system still executes processing synchronously as a graceful degradation path.
 
-`.devcontainer/devcontainer.json` includes:
+```python
+try:
+	process_pdf.delay(document.id)
+except Exception:
+	process_pdf(document.id)
+```
 
-- Python 3.11 base image
-- Node 20 feature
-- Docker-in-Docker feature for container workflows
-- VS Code extensions for linting, formatting, and SQL tooling
+### 3) Worker Status Discipline
 
-## Roadmap Candidates
+The worker updates status at task start and completion, and resets to `Pending` on exceptions.
 
-- Retry policies and dead-letter handling for failed jobs
-- Structured logging and trace correlation IDs
-- AuthN/AuthZ for ingestion endpoints
-- Chunk embedding pipeline with collection versioning
-- Integration and contract test suite across API and worker boundaries
+```python
+document.upload_status = "Processing"
+session.commit()
+
+# ... file read + chunking + vector boundary
+
+document.upload_status = "Completed"
+session.commit()
+```
+
+### 4) UI Polling and Observability
+
+The dashboard polls document list and summary every 4 seconds to provide operator-grade visibility without page reloads.
+
+```tsx
+useEffect(() => {
+  fetchItems();
+  const interval = window.setInterval(fetchItems, 4000);
+  return () => window.clearInterval(interval);
+}, [fetchItems, refreshKey]);
+```
+
+## Operational Runbook
+
+### Health and Quick Checks
+
+```bash
+curl -s http://localhost:8001/health
+curl -s http://localhost:8001/api/v1/summary
+```
+
+### Local Logs
+
+```bash
+tail -f .backend.log
+tail -f .frontend.log
+```
+
+### Process Control
+
+```bash
+./scripts/dev-up.sh
+./scripts/dev-down.sh
+```
+
+## Troubleshooting
+
+| Symptom | Likely Cause | Action |
+|---|---|---|
+| `Missing .env` | Runtime config not initialized | `cp .env.example .env` |
+| `No module named uvicorn` | Backend dependencies missing | install `backend/requirements.txt` in active Python env |
+| `npm: not found` | Node runtime not installed in host/local mode | install Node 20+ or use container mode |
+| `EADDRINUSE` on frontend port | Previous dev server still running | stop old process or change port |
+| Upload succeeds but slow status updates | Worker/broker unavailable | verify Redis/Celery health or rely on degraded fallback |
+
+## Engineering Roadmap
+
+High-impact next iterations:
+
+1. Retry policies + dead-letter strategy for failed tasks.
+2. Structured logging with correlation ids across API and worker.
+3. AuthN/AuthZ and tenant-aware document boundaries.
+4. True document parsing/chunking pipeline (PDF, DOCX extraction).
+5. Embedding + collection management in Qdrant.
+6. Contract and integration tests for API/worker boundaries.
 
 ## Summary
 
-This project is intentionally structured like an engineering deliverable, not a demo page:
+This codebase already demonstrates the core architecture patterns expected from senior-level ingestion systems:
 
-- observable
-- asynchronous
-- environment-aware
-- deployment-ready
-
-It provides a strong foundation for enterprise-grade document ingestion in RAG platforms.
+- async offloading with observable state
+- resilient runtime behavior under partial infrastructure failure
+- environment-aware execution paths
+- explicit service boundaries ready for extension into enterprise RAG platforms
